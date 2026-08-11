@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
 """
-METASNIE ULTRA-SPEED WITH VISIBLE LOGS
-- Forces output flushing
-- Real-time stats visible on GitHub Actions
+METASNIE ULTRA-SPEED WITH DEBUG LOGGING
 """
 
 import asyncio
@@ -19,16 +17,12 @@ from urllib.parse import urlencode
 
 urllib3.disable_warnings()
 
-# FORCE UNBUFFERED OUTPUT
 sys.stdout = os.fdopen(sys.stdout.fileno(), 'w', 1)
 sys.stderr = os.fdopen(sys.stderr.fileno(), 'w', 1)
 
 def log(msg):
-    """Print with forced flush."""
     print(msg, flush=True)
 
-# ─────────────────────────────────────────────────────────────────────────────
-# CONFIG
 # ─────────────────────────────────────────────────────────────────────────────
 
 def load_config_from_env():
@@ -38,8 +32,8 @@ def load_config_from_env():
         "webhook_enabled": os.getenv("WEBHOOK_ENABLED", "true").lower() == "true",
         "webhook_url": os.getenv("WEBHOOK_URL", ""),
         "selected_list": os.getenv("NAMES_LIST", "lists/names.txt"),
-        "timeout_total": float(os.getenv("TIMEOUT_TOTAL", 0.3)),
-        "timeout_connect": float(os.getenv("TIMEOUT_CONNECT", 0.05)),
+        "timeout_total": float(os.getenv("TIMEOUT_TOTAL", 2.0)),  # LONGER
+        "timeout_connect": float(os.getenv("TIMEOUT_CONNECT", 1.0)),  # LONGER
     }
 
 def load_creds():
@@ -57,8 +51,6 @@ def load_names(path):
         return []
 
 # ─────────────────────────────────────────────────────────────────────────────
-# ULTRA-FAST CHECKER
-# ─────────────────────────────────────────────────────────────────────────────
 
 class UltraFastChecker:
     def __init__(self, cfg):
@@ -67,6 +59,9 @@ class UltraFastChecker:
         self._cache = set()
         self._found = 0
         self._checks = 0
+        self._errors = 0
+        self._available = 0
+        self._taken = 0
         self._sniper = None
         self.t_start = 0
     
@@ -78,10 +73,11 @@ class UltraFastChecker:
         self._cache.clear()
         self._found = 0
         self._checks = 0
+        self._errors = 0
         self.t_start = time.perf_counter()
         
-        log(f"🔥 [START] Checking {len(names)} names")
-        log(f"⚙️  Loop mode: {self.cfg['loop_mode']} | Snipe: {self.cfg['snipe_mode']}")
+        log(f"🔥 Starting checker with {len(names)} names")
+        log(f"⏱️  Timeouts: {self.cfg['timeout_total']}s total, {self.cfg['timeout_connect']}s connect")
         log("")
         
         tc = self.cfg["timeout_total"]
@@ -108,36 +104,28 @@ class UltraFastChecker:
             trust_env=True,
         )
         
-        # Stats loop - VERBOSE
+        # Stats loop
         async def _stats_loop():
-            last_check = [0]
+            last = [0]
             while self.running:
-                await asyncio.sleep(1)
+                await asyncio.sleep(2)
                 el = time.perf_counter() - self.t_start
-                cps = self._checks / el if el > 0 else 0
-                delta = self._checks - last_check[0]
-                log(f"⚡ [{int(el)}s] CPS: {cps:.0f} | Found: {self._found} | Total: {self._checks}")
-                last_check[0] = self._checks
+                if el > 0:
+                    cps = self._checks / el
+                    delta = self._checks - last[0]
+                    log(f"📊 [{int(el)}s] {delta} checks | CPS: {cps:.0f} | Found: {self._found} | Errors: {self._errors}")
+                    last[0] = self._checks
         
         # Per-name worker
         async def _worker(name):
-            sem = asyncio.Semaphore(1000)  # MAX concurrency
-            
             while self.running:
-                await sem.acquire()
-                if not self.running:
-                    sem.release()
-                    break
-                
-                asyncio.create_task(self._check(session, name, sem))
-                self._checks += 1
+                await self._check(session, name)
                 
                 if not loop_mode:
-                    for _ in range(1000):
-                        await sem.acquire()
                     break
         
         try:
+            log("🚀 Starting workers...")
             workers = [asyncio.create_task(_worker(n)) for n in names]
             stats_task = asyncio.create_task(_stats_loop())
             
@@ -148,52 +136,58 @@ class UltraFastChecker:
             await session.close()
             self.running = False
             
-            # Final stats
             el = time.perf_counter() - self.t_start
             log("")
-            log(f"✅ [DONE] {self._checks} checks in {el:.1f}s ({self._checks/el:.0f} CPS)")
+            log(f"✅ DONE: {self._checks} checks in {el:.1f}s ({self._checks/el:.0f} CPS)")
             log(f"🎯 Found: {self._found}")
     
-    async def _check(self, session, name, sem):
-        """ULTRA-FAST check."""
+    async def _check(self, session, name):
+        """Check single name."""
         try:
             async with session.get(
                 f"https://horizon.meta.com/profile/{name}/",
                 allow_redirects=False,
-                timeout=self.cfg["timeout_total"]
             ) as r:
+                self._checks += 1
                 loc = r.headers.get("Location", "")
                 
-                # Fast status parse
+                # Parse status
                 if r.status in (301, 302, 303, 307, 308):
-                    result = "AVAILABLE" if loc == "https://horizon.meta.com/" else "TAKEN"
+                    if loc == "https://horizon.meta.com/":
+                        result = "AVAILABLE"
+                    else:
+                        result = "TAKEN"
                 elif r.status == 200:
-                    result = "AVAILABLE" if f"/profile/{name}" not in str(r.url) else "TAKEN"
+                    result = "TAKEN"
                 elif r.status == 404:
                     result = "AVAILABLE"
                 elif r.status == 429:
                     result = "RATE"
                 else:
-                    result = None
+                    result = f"HTTP{r.status}"
                 
+                # Log result
                 if result == "AVAILABLE" and name not in self._cache:
                     self._cache.add(name)
                     self._found += 1
-                    log(f"🎯 **AVAILABLE** → {name}")
+                    log(f"🎯 AVAILABLE: {name} !!!")
                     
                     if self.cfg["snipe_mode"] and self._sniper:
                         self._sniper.fire(name)
                     
                     if self.cfg["webhook_enabled"]:
                         self._send_webhook(name)
+                elif result == "TAKEN":
+                    self._taken += 1
+                elif result == "RATE":
+                    log(f"⚠️ RATE LIMITED: {name}")
         
         except asyncio.TimeoutError:
-            pass
+            self._errors += 1
+            log(f"⏱️ TIMEOUT: {name}")
         except Exception as e:
-            pass
-        
-        finally:
-            sem.release()
+            self._errors += 1
+            log(f"❌ ERROR: {name} - {str(e)[:40]}")
     
     def _send_webhook(self, name):
         try:
@@ -202,8 +196,6 @@ class UltraFastChecker:
         except:
             pass
 
-# ─────────────────────────────────────────────────────────────────────────────
-# ULTRA-FAST SNIPER
 # ─────────────────────────────────────────────────────────────────────────────
 
 class UltraFastSniper:
@@ -220,7 +212,7 @@ class UltraFastSniper:
                 log(f"  ✅ Account {i+1} ready")
             else:
                 log(f"  ❌ Account {i+1} failed")
-        log(f"✅ {ok}/{len(self.snipers)} accounts ready")
+        log(f"✅ {ok}/{len(self.snipers)} ready")
         log("")
         return ok > 0
     
@@ -246,7 +238,7 @@ class FastSniperAccount:
         
         self.pool = urllib3.HTTPSConnectionPool(
             'accountscenter.meta.com', port=443, maxsize=1, block=True,
-            timeout=urllib3.Timeout(connect=0.05, read=3),
+            timeout=urllib3.Timeout(connect=1, read=5),
             ssl_context=ctx,
         )
         
@@ -323,12 +315,10 @@ class FastSniperAccount:
             pass
 
 # ─────────────────────────────────────────────────────────────────────────────
-# MAIN
-# ─────────────────────────────────────────────────────────────────────────────
 
 def main():
     log("════════════════════════════════════════")
-    log("   METASNIE ULTRA-SPEED CHECKER v2")
+    log("   METASNIE ULTRA-SPEED CHECKER v3")
     log("════════════════════════════════════════")
     log("")
     
@@ -336,20 +326,18 @@ def main():
     
     names = load_names(cfg["selected_list"])
     if not names:
-        log("[ERROR] No names loaded!")
+        log("[ERROR] No names!")
         sys.exit(1)
     
-    log(f"📋 Loaded {len(names)} names")
+    log(f"📋 {len(names)} names")
     
     creds = load_creds()
     sniper = None
     
     if cfg["snipe_mode"] and creds:
-        log(f"🔐 Loaded {len(creds)} credentials")
+        log(f"🔐 {len(creds)} accounts")
         sniper = UltraFastSniper(creds)
         sniper.warm_all()
-    
-    log("")
     
     checker = UltraFastChecker(cfg)
     if sniper:
