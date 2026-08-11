@@ -52,7 +52,7 @@ jobs:
           PROXIES: ${{ secrets.PROXIES }}
           CONCURRENCY: 500
           SNIPE_MODE: 'true'
-          LOOP_MODE: 'false'
+          LOOP_MODE: 'true'
           TIMEOUT_TOTAL: '0.5'
           TIMEOUT_CONNECT: '0.1'
         run: |
