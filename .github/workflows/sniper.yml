@@ -1,0 +1,60 @@
+name: Metasnie Sniper
+
+on:
+  schedule:
+    # Run every minute
+    - cron: '* * * * *'
+  
+  # Manual trigger
+  workflow_dispatch:
+
+jobs:
+  snipe:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+      
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install aiohttp urllib3 requests
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+      
+      - name: Download names list (optional)
+        run: |
+          mkdir -p lists
+          # Uncomment if you have a URL to download from:
+          # curl -o lists/names.txt https://your-list-url/names.txt
+          # For now, use local list if it exists
+          if [ ! -f lists/names.txt ]; then
+            echo "testname1" > lists/names.txt
+            echo "testname2" >> lists/names.txt
+          fi
+      
+      - name: Prepare credentials
+        run: |
+          mkdir -p creds
+          cat > creds/creds.json << 'EOF'
+          ${{ secrets.CREDS_JSON }}
+          EOF
+      
+      - name: Run sniper
+        env:
+          NAMES_LIST: lists/names.txt
+          WEBHOOK_URL: ${{ secrets.WEBHOOK_URL }}
+          PROXIES: ${{ secrets.PROXIES }}
+          CONCURRENCY: 500
+          SNIPE_MODE: 'true'
+          LOOP_MODE: 'false'
+          TIMEOUT_TOTAL: '0.5'
+          TIMEOUT_CONNECT: '0.1'
+        run: |
+          python metasnie_headless_cli.py --env --proxies "$PROXIES"
+        timeout-minutes: 5
