@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-METASNIE HEADLESS CLI
-Runs without GUI. Perfect for GitHub Actions, servers, or background execution.
+METASNIE HEADLESS CLI - FULL LOGGING VERSION
+Runs without GUI. Shows every name checked in logs.
 """
 
 import argparse
@@ -89,11 +89,11 @@ class ProxyRotator:
         return proxy
 
 # ─────────────────────────────────────────────────────────────────────────────
-# FAST CHECKER (NO GUI)
+# FAST CHECKER (NO GUI) - WITH DETAILED LOGGING
 # ─────────────────────────────────────────────────────────────────────────────
 
 class HeadlessChecker:
-    """Fast async checker without GUI."""
+    """Fast async checker without GUI - shows every check."""
     
     def __init__(self, cfg, proxies=None):
         self.cfg = cfg
@@ -118,6 +118,7 @@ class HeadlessChecker:
         
         print(f"[INFO] Starting checker with {len(names)} names")
         print(f"[INFO] Snipe mode: {self.cfg.get('snipe_mode')}")
+        print()
         
         tc = float(self.cfg.get("timeout_total", 0.5))
         cc = float(self.cfg.get("timeout_connect", 0.1))
@@ -196,7 +197,7 @@ class HeadlessChecker:
             print("[INFO] Checker stopped")
     
     async def _check(self, session, name, sem):
-        """Check single name (with proxy rotation)."""
+        """Check single name (with proxy rotation) - FULL LOGGING."""
         url = f"https://horizon.meta.com/profile/{name}/"
         proxy = self.proxy_rotator.get_next()
         
@@ -222,12 +223,12 @@ class HeadlessChecker:
                 else:
                     result = "UNKNOWN"
                 
-                # Log and alert
+                # LOG EVERYTHING
                 if result == "AVAILABLE":
                     if name not in self._cache:
                         self._cache.add(name)
                         self._found += 1
-                        print(f"[AVAILABLE] {name}")
+                        print(f"🎯 [AVAILABLE] {name} ← FOUND!")
                         
                         # Fire sniper if enabled
                         if self.cfg.get("snipe_mode") and self._sniper:
@@ -237,14 +238,16 @@ class HeadlessChecker:
                         if self.cfg.get("webhook_enabled"):
                             self._send_webhook(name)
                 elif result == "TAKEN":
-                    pass  # Silent
+                    print(f"[TAKEN] {name}")
                 elif result == "RATE":
-                    print(f"[RATE] {name}")
+                    print(f"⚠️ [RATE] {name}")
+                else:
+                    print(f"[{result}] {name}")
         
         except asyncio.TimeoutError:
-            pass  # Silent timeout
+            print(f"⏱️ [TIMEOUT] {name}")
         except Exception as e:
-            pass  # Silent error
+            print(f"❌ [ERROR] {name} - {str(e)[:30]}")
         
         finally:
             sem.release()
@@ -313,7 +316,7 @@ class UltraFastSniper:
             with lock:
                 results[idx] = result
                 if result.get('success'):
-                    print(f"[SUCCESS] Account {idx+1} claimed '{name}'")
+                    print(f"✅ [SUCCESS] Account {idx+1} claimed '{name}'")
         
         for idx, sniper in enumerate(self.snipers):
             t = threading.Thread(target=_fire, args=(idx, sniper), daemon=True)
@@ -486,6 +489,7 @@ def main():
         sys.exit(1)
     
     print(f"[INFO] Loaded {len(names)} names")
+    print()
     
     # Load creds and start sniper
     creds = load_creds()
@@ -497,6 +501,8 @@ def main():
         if not sniper.warm_all():
             print("[WARN] Sniper accounts not ready")
             sniper = None
+    
+    print()
     
     # Create checker
     checker = HeadlessChecker(cfg, proxies=args.proxies)
