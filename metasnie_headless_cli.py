@@ -1,10 +1,8 @@
 #!/usr/bin/env python3
 """
-METASNIE ULTRA-SPEED CHECKER
-- No logging overhead
-- Max concurrency (1000+)
-- Direct urllib3 for checking
-- Minimal Python overhead
+METASNIE ULTRA-SPEED WITH VISIBLE LOGS
+- Forces output flushing
+- Real-time stats visible on GitHub Actions
 """
 
 import asyncio
@@ -20,6 +18,14 @@ import uuid
 from urllib.parse import urlencode
 
 urllib3.disable_warnings()
+
+# FORCE UNBUFFERED OUTPUT
+sys.stdout = os.fdopen(sys.stdout.fileno(), 'w', 1)
+sys.stderr = os.fdopen(sys.stderr.fileno(), 'w', 1)
+
+def log(msg):
+    """Print with forced flush."""
+    print(msg, flush=True)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # CONFIG
@@ -51,7 +57,7 @@ def load_names(path):
         return []
 
 # ─────────────────────────────────────────────────────────────────────────────
-# ULTRA-FAST CHECKER (MINIMAL OVERHEAD)
+# ULTRA-FAST CHECKER
 # ─────────────────────────────────────────────────────────────────────────────
 
 class UltraFastChecker:
@@ -74,7 +80,9 @@ class UltraFastChecker:
         self._checks = 0
         self.t_start = time.perf_counter()
         
-        print(f"[START] {len(names)} names | Loop: {self.cfg['loop_mode']}")
+        log(f"🔥 [START] Checking {len(names)} names")
+        log(f"⚙️  Loop mode: {self.cfg['loop_mode']} | Snipe: {self.cfg['snipe_mode']}")
+        log("")
         
         tc = self.cfg["timeout_total"]
         cc = self.cfg["timeout_connect"]
@@ -100,15 +108,15 @@ class UltraFastChecker:
             trust_env=True,
         )
         
-        # Stats only
+        # Stats loop - VERBOSE
         async def _stats_loop():
             last_check = [0]
             while self.running:
-                await asyncio.sleep(2)
+                await asyncio.sleep(1)
                 el = time.perf_counter() - self.t_start
                 cps = self._checks / el if el > 0 else 0
                 delta = self._checks - last_check[0]
-                print(f"[CPS] {cps:.0f}/s | Found: {self._found} | Total: {self._checks}")
+                log(f"⚡ [{int(el)}s] CPS: {cps:.0f} | Found: {self._found} | Total: {self._checks}")
                 last_check[0] = self._checks
         
         # Per-name worker
@@ -139,9 +147,15 @@ class UltraFastChecker:
         finally:
             await session.close()
             self.running = False
+            
+            # Final stats
+            el = time.perf_counter() - self.t_start
+            log("")
+            log(f"✅ [DONE] {self._checks} checks in {el:.1f}s ({self._checks/el:.0f} CPS)")
+            log(f"🎯 Found: {self._found}")
     
     async def _check(self, session, name, sem):
-        """ULTRA-FAST check - zero overhead."""
+        """ULTRA-FAST check."""
         try:
             async with session.get(
                 f"https://horizon.meta.com/profile/{name}/",
@@ -165,7 +179,7 @@ class UltraFastChecker:
                 if result == "AVAILABLE" and name not in self._cache:
                     self._cache.add(name)
                     self._found += 1
-                    print(f"🎯 AVAILABLE: {name}")
+                    log(f"🎯 **AVAILABLE** → {name}")
                     
                     if self.cfg["snipe_mode"] and self._sniper:
                         self._sniper.fire(name)
@@ -173,7 +187,9 @@ class UltraFastChecker:
                     if self.cfg["webhook_enabled"]:
                         self._send_webhook(name)
         
-        except:
+        except asyncio.TimeoutError:
+            pass
+        except Exception as e:
             pass
         
         finally:
@@ -196,12 +212,16 @@ class UltraFastSniper:
         self.snipers = [FastSniperAccount(c) for c in creds]
     
     def warm_all(self):
-        print(f"[WARM] {len(self.snipers)} accounts")
+        log(f"🔥 Warming {len(self.snipers)} accounts...")
         ok = 0
-        for s in self.snipers:
+        for i, s in enumerate(self.snipers):
             if s.warm():
                 ok += 1
-        print(f"[READY] {ok}/{len(self.snipers)}")
+                log(f"  ✅ Account {i+1} ready")
+            else:
+                log(f"  ❌ Account {i+1} failed")
+        log(f"✅ {ok}/{len(self.snipers)} accounts ready")
+        log("")
         return ok > 0
     
     def fire(self, name):
@@ -307,22 +327,29 @@ class FastSniperAccount:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def main():
+    log("════════════════════════════════════════")
+    log("   METASNIE ULTRA-SPEED CHECKER v2")
+    log("════════════════════════════════════════")
+    log("")
+    
     cfg = load_config_from_env()
     
     names = load_names(cfg["selected_list"])
     if not names:
-        print("[ERROR] No names")
+        log("[ERROR] No names loaded!")
         sys.exit(1)
     
-    print(f"[LOAD] {len(names)} names")
+    log(f"📋 Loaded {len(names)} names")
     
     creds = load_creds()
     sniper = None
     
     if cfg["snipe_mode"] and creds:
-        print(f"[LOAD] {len(creds)} accounts")
+        log(f"🔐 Loaded {len(creds)} credentials")
         sniper = UltraFastSniper(creds)
         sniper.warm_all()
+    
+    log("")
     
     checker = UltraFastChecker(cfg)
     if sniper:
@@ -331,7 +358,7 @@ def main():
     try:
         asyncio.run(checker.run(names))
     except KeyboardInterrupt:
-        print("\n[STOP]")
+        log("\n[STOPPED]")
         checker.running = False
 
 if __name__ == "__main__":
